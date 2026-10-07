@@ -254,7 +254,10 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
+try:
+    init_db()
+except Exception as e:
+    print(f"⚠️ [DB INIT WARNING]: {e}")
 
 def get_bank_capital():
     conn = get_db_connection()
@@ -1484,39 +1487,49 @@ def pending():
     pending_txns = cursor.fetchall()
     conn.close()
 
+    user_role = session.get('role')
+
     cust_html = ""
     for c in pending_custs:
+        manager_cust_btns = ""
+        if user_role == 'MANAGER':
+            manager_cust_btns = f"""
+            <div style="margin-top:8px;">
+                <a href="/approve_customer/{c['customer_id']}" class="btn-action btn-green">✅ Mirkaneessi (Approve)</a>
+                <a href="/reject_customer/{c['customer_id']}" class="btn-action btn-red" onclick="return confirm('Sassaabuu barbaaddaa?')">❌ Kuffisi (Reject)</a>
+            </div>
+            """
+
         cust_html += f"""
         <div class="item-card">
             <div style="font-size:13px; font-weight:bold;">{c['full_name']} (Acc: {c['customer_id']})</div>
             <div style="font-size:11px; color:#64748b;">Phone: {c['phone']} | Acc Type: {c['account_type']} | Balance: {c['balance']:,.2f} Birr</div>
             <div class="img-grid">
-                <a href="/uploads/{c['photo_path']}" target="_blank"><img src="/uploads/{c['photo_path']}" alt="Face"></a>
-                <a href="/uploads/{c['signature_path']}" target="_blank"><img src="/uploads/{c['signature_path']}" alt="Signature"></a>
+                <a href="/uploads/{c['photo_path']}" target="_blank"><img src="/uploads/{c['photo_path']}" alt="Face" style="height:60px; border-radius:6px; margin-top:6px; margin-right:6px;"></a>
+                <a href="/uploads/{c['signature_path']}" target="_blank"><img src="/uploads/{c['signature_path']}" alt="Signature" style="height:60px; border-radius:6px; margin-top:6px;"></a>
             </div>
-            {% if session['role'] == 'MANAGER' %}
-            <div style="margin-top:8px;">
-                <a href="/approve_customer/{c['customer_id']}" class="btn-action btn-green">✅ Mirkaneessi (Approve)</a>
-                <a href="/reject_customer/{c['customer_id']}" class="btn-action btn-red" onclick="return confirm('Sassaabuu barbaaddaa?')">❌ Kuffisi (Reject)</a>
-            </div>
-            {% endif %}
+            {manager_cust_btns}
         </div>
         """
 
     txn_html = ""
     for t in pending_txns:
+        manager_txn_btns = ""
+        if user_role == 'MANAGER':
+            manager_txn_btns = f"""
+            <div style="margin-top:8px;">
+                <a href="/approve_transaction/{t['txn_id']}" class="btn-action btn-green">✅ Approve Txn</a>
+                <a href="/reject_transaction/{t['txn_id']}" class="btn-action btn-red" onclick="return confirm('Kuffisuu barbaaddaa?')">❌ Reject Txn</a>
+            </div>
+            """
+
         txn_html += f"""
         <div class="item-card">
             <div style="font-size:13px; font-weight:bold; color:#047857;">{t['txn_type']} - {t['amount']:,.2f} Birr</div>
             <div style="font-size:11px; color:#475569;">Maammila: <b>{t['customer_name']}</b> (Acc: {t['customer_id']})</div>
             <div style="font-size:11px; color:#64748b;">Ref: {t['ft_reference']} | Comm: {t['commission']:,.2f} Birr | Bank: {t['bank_name']}</div>
             <div style="font-size:10px; color:#94a3b8;">Remarks: {t['reason']} | By: {t['created_by']}</div>
-            {% if session['role'] == 'MANAGER' %}
-            <div style="margin-top:8px;">
-                <a href="/approve_transaction/{t['txn_id']}" class="btn-action btn-green">✅ Approve Txn</a>
-                <a href="/reject_transaction/{t['txn_id']}" class="btn-action btn-red" onclick="return confirm('Kuffisuu barbaaddaa?')">❌ Reject Txn</a>
-            </div>
-            {% endif %}
+            {manager_txn_btns}
         </div>
         """
 
@@ -1531,6 +1544,21 @@ def pending():
     </div>
     """
     return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
+
+@app.route('/reject_customer/<cust_id>')
+def reject_customer(cust_id):
+    if 'role' not in session or session['role'] != 'MANAGER':
+        return "🚫 Hayyama Manager Qofa!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET status = 'REJECTED' WHERE customer_id = ?", (cust_id,))
+    cursor.execute("UPDATE transactions SET status = 'REJECTED' WHERE customer_id = ? AND status = 'PENDING_MANAGER'", (cust_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"Manager ({session['username']}) customer ID {cust_id} reject godheera.")
+    return redirect('/pending')
 
 @app.route('/approve_customer/<cust_id>')
 def approve_customer(cust_id):
@@ -1580,6 +1608,20 @@ def approve_transaction(txn_id):
 
     conn.close()
     add_notification(f"Manager transaction {txn_id} approve godheera.")
+    return redirect('/pending')
+
+@app.route('/reject_transaction/<txn_id>')
+def reject_transaction(txn_id):
+    if 'role' not in session or session['role'] != 'MANAGER':
+        return "🚫 Hayyama Manager Qofa!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE transactions SET status = 'REJECTED' WHERE txn_id = ?", (txn_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"Manager ({session['username']}) transaction {txn_id} reject godheera.")
     return redirect('/pending')
 
 @app.route('/customers')
