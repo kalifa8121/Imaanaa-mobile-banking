@@ -187,7 +187,7 @@ def init_db():
             freeze_status TEXT DEFAULT 'UNFROZEN',
             freeze_reason TEXT DEFAULT '',
             mobile_pin TEXT DEFAULT '1234',
-            mobile_status TEXT DEFAULT 'ACTIVE',
+            mobile_status TEXT DEFAULT 'INACTIVE',
             created_at TEXT
         )
     """)
@@ -361,6 +361,7 @@ HTML_LAYOUT = """
         {% elif session.get('mobile_cust_id') %}
             <div style="font-size:12px;">
                 <span style="margin-right:4px;">📱 <b>{{ session['mobile_name'] }}</b></span>
+                <a href="/mobile_change_pin" style="color: #fde047; margin-left:8px; text-decoration:none;">🔑 PIN Jijjiiri</a>
                 <a href="/mobile_logout" style="color: #fca5a5; margin-left:8px; text-decoration:none;">Logout</a>
             </div>
         {% else %}
@@ -522,13 +523,17 @@ def mobile_login():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT customer_id, full_name, phone, balance, status, freeze_status, mobile_pin FROM customers WHERE customer_id = ?", (cust_id,))
+        cursor.execute("SELECT customer_id, full_name, phone, balance, status, freeze_status, mobile_pin, mobile_status FROM customers WHERE customer_id = ?", (cust_id,))
         cust = cursor.fetchone()
         conn.close()
 
         if cust:
             if cust['status'] != 'ACTIVE':
                 msg = "❌ Akkaawunttiin keessan mirkanaa'uu ykn sassaabamuu qaba. Baankii qunnamaa."
+            elif cust['mobile_status'] == 'PENDING_APPROVAL':
+                msg = "⏱️ Gaaffiin Mobile Banking keessan Mirkaneessa Manager eegaa jira (Pending Manager Approval)!"
+            elif cust['mobile_status'] != 'ACTIVE':
+                msg = "❌ Tajaajilli Mobile Banking akkaawuntii kanaaf hin banamne! Maker/Baankii qunnamaa."
             elif cust['freeze_status'] == 'FROZEN':
                 msg = "🚫 Akkaawunttiin keessan uggurameera (Frozen)."
             elif cust['mobile_pin'] != pin:
@@ -617,6 +622,7 @@ def mobile_dashboard():
         <a href="/mobile_rtgs" class="btn-card btn-card-mobile"><span class="icon">🏛️</span><span>Other Bank (RTGS)</span></a>
         <a href="/mobile_topup" class="btn-card btn-card-mobile"><span class="icon">⚡</span><span>Wallet & Airtime</span></a>
         <a href="/mobile_statement" class="btn-card btn-card-mobile"><span class="icon">📜</span><span>Bank Statement</span></a>
+        <a href="/mobile_change_pin" class="btn-card btn-card-mobile"><span class="icon">🔑</span><span>PIN Passcode Jijjiiri</span></a>
     </div>
 
     <div class="box">
@@ -979,6 +985,68 @@ def mobile_statement():
                 {rows_html if rows_html else '<tr><td colspan="5" style="padding:16px; text-align:center;">Sochiin herregaa hin jiru.</td></tr>'}
             </tbody>
         </table>
+    </div>
+    """
+    return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
+
+@app.route('/mobile_change_pin', methods=['GET', 'POST'])
+def mobile_change_pin():
+    if 'mobile_cust_id' not in session:
+        return redirect('/mobile_login')
+
+    msg = None
+    msg_type = "green"
+    cust_id = session['mobile_cust_id']
+
+    if request.method == 'POST':
+        old_pin = request.form.get('old_pin', '').strip()
+        new_pin = request.form.get('new_pin', '').strip()
+        confirm_pin = request.form.get('confirm_pin', '').strip()
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT mobile_pin FROM customers WHERE customer_id = ?", (cust_id,))
+        cust = cursor.fetchone()
+
+        if not cust or cust['mobile_pin'] != old_pin:
+            msg = "❌ PIN duraanii dogoggoraa!"
+            msg_type = "red"
+        elif new_pin != confirm_pin:
+            msg = "❌ PIN haaraa fi Mirkaneessaan wal hin simne!"
+            msg_type = "red"
+        elif len(new_pin) != 4 or not new_pin.isdigit():
+            msg = "❌ PIN-ni haaraa lakkoofsa digiti 4 ta'uu qaba!"
+            msg_type = "red"
+        else:
+            cursor.execute("UPDATE customers SET mobile_pin = ? WHERE customer_id = ?", (new_pin, cust_id))
+            conn.commit()
+            msg = "✅ PIN Mobile Banking keessan milkaa'inaan jijjiirameera!"
+            msg_type = "green"
+
+        conn.close()
+
+    content = f"""
+    <div class="box">
+        <h2 style="font-size:16px; color:#1e3a8a; margin-bottom:12px;">🔑 PIN Mobile Banking Jijjiiri</h2>
+        {f"<p style='background:{'#dcfce7' if msg_type=='green' else '#fee2e2'}; color:{'#166534' if msg_type=='green' else '#991b1b'}; padding:10px; border-radius:6px; font-size:12px; font-weight:bold; margin-bottom:12px;'>{msg}</p>" if msg else ""}
+        <form method="POST">
+            <div class="form-group">
+                <label>PIN Duraanii (Current PIN)</label>
+                <input type="password" id="old_pin_id" name="old_pin" maxlength="6" placeholder="****" required class="input-field">
+                <span id="old_pin_toggle" class="pwd-toggle" onclick="togglePasswordVisibility('old_pin_id', 'old_pin_toggle')">👁️</span>
+            </div>
+            <div class="form-group">
+                <label>PIN Haaraa Digit 4 (New PIN)</label>
+                <input type="password" id="new_pin_id" name="new_pin" maxlength="4" placeholder="****" required class="input-field">
+                <span id="new_pin_toggle" class="pwd-toggle" onclick="togglePasswordVisibility('new_pin_id', 'new_pin_toggle')">👁️</span>
+            </div>
+            <div class="form-group">
+                <label>PIN Haaraa Mirkaneessi (Confirm New PIN)</label>
+                <input type="password" id="conf_pin_id" name="confirm_pin" maxlength="4" placeholder="****" required class="input-field">
+                <span id="conf_pin_toggle" class="pwd-toggle" onclick="togglePasswordVisibility('conf_pin_id', 'conf_pin_toggle')">👁️</span>
+            </div>
+            <button type="submit" class="btn-submit" style="background:#1d4ed8;">💾 PIN Jijjiiri</button>
+        </form>
     </div>
     """
     return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
@@ -1393,6 +1461,7 @@ def register():
         phone = request.form.get('phone').strip()
         gender = request.form.get('gender')
         account_type = request.form.get('account_type')
+        enable_mobile = request.form.get('enable_mobile') # Checkbox for Mobile Banking consent
         initial_balance = max(0.0, float(request.form.get('initial_balance', 0.0)))
         photo_file = request.files.get('photo')
         sig_file = request.files.get('signature')
@@ -1410,10 +1479,12 @@ def register():
             cust_id = str(START_ID) if max_id is None or max_id < START_ID else str(max_id + 1)
             now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            mob_status = 'PENDING_APPROVAL' if enable_mobile else 'INACTIVE'
+
             cursor.execute("""
-                INSERT INTO customers (customer_id, full_name, phone, gender, account_type, photo_path, signature_path, balance, status, mobile_pin, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_APPROVAL', '1234', ?)
-            """, (cust_id, full_name, phone, gender, account_type, photo_filename, sig_filename, initial_balance, now))
+                INSERT INTO customers (customer_id, full_name, phone, gender, account_type, photo_path, signature_path, balance, status, mobile_pin, mobile_status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_APPROVAL', '1234', ?, ?)
+            """, (cust_id, full_name, phone, gender, account_type, photo_filename, sig_filename, initial_balance, mob_status, now))
 
             if initial_balance > 0:
                 ft_ref = f"FT{datetime.datetime.now().strftime('%y%j')}{random.randint(10000, 99999)}"
@@ -1424,12 +1495,12 @@ def register():
 
             conn.commit()
             conn.close()
-            msg = f"✅ Maammilli {full_name} galmaa'eera! (Acc ID: {cust_id}, Mobile PIN: 1234)"
+            msg = f"✅ Maammilli {full_name} galmaa'eera! (Acc ID: {cust_id}, Mobile Status: {mob_status})"
             add_notification(f"Maammilli haaraan ({full_name}) galmaa'ee manager approval eegaa jira.")
 
     content = f"""
     <div class="box">
-        <h2 style="font-size: 16px; margin-bottom: 12px; color:#065f46;">👤 Galmee Maammila Haaraa (Customer Registration)</h2>
+        <h2 style="font-size: 16px; margin-bottom: 12px; color:#065f46;">👤 Galmee Maammila Haaraa & Mobile Banking Request</h2>
         {f"<p style='background:#dcfce7; color:#166534; padding:10px; border-radius:6px; font-size:12px; font-weight:bold; margin-bottom:12px;'>{msg}</p>" if msg else ""}
         <form method="POST" enctype="multipart/form-data">
             <div class="form-group">
@@ -1454,6 +1525,13 @@ def register():
                     <option value="MUDARABA">Mudaraba Investment (Kuusaa Bu'aa 50/50)</option>
                 </select>
             </div>
+            <div class="form-group" style="background:#eff6ff; padding:12px; border-radius:8px; border:1px solid #bfdbfe;">
+                <label style="color:#1e3a8a; display:flex; align-items:center; gap:8px; cursor:pointer;">
+                    <input type="checkbox" name="enable_mobile" value="1" checked style="width:18px; height:18px;">
+                    <span>📲 Tajaajila Mobile Banking Maammilaaf Banuuf Gaaffii Dhiyeessi (Fedhii Maammilaan)</span>
+                </label>
+                <p style="font-size:11px; color:#64748b; margin-top:4px;">PIN Yeroo: <b>1234</b> (Manager approval booda maammilli login gochuu danda'a)</p>
+            </div>
             <div class="form-group">
                 <label>Hamma Kusaa Jalqabaa (Birr)</label>
                 <input type="number" step="0.01" min="0" name="initial_balance" value="0.00" class="input-field" required>
@@ -1466,11 +1544,53 @@ def register():
                 <label>Mallattoo Maammilaa (Signature)</label>
                 <input type="file" name="signature" accept="image/*" required class="input-field">
             </div>
-            <button type="submit" class="btn-submit">💾 Galmeessi (Register)</button>
+            <button type="submit" class="btn-submit">💾 Galmeessi (Register & Request Mobile)</button>
         </form>
     </div>
     """
     return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
+
+@app.route('/enable_mobile_service/<cust_id>')
+def enable_mobile_service(cust_id):
+    if 'role' not in session or session['role'] not in ['MAKER', 'MANAGER', 'CEO']:
+        return "🚫 Hayyama Hin Qabdan!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET mobile_status = 'PENDING_APPROVAL' WHERE customer_id = ?", (cust_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"Maker ({session['username']}) maammila (Acc: {cust_id})'iif Mobile Banking gaafateera. Manager approval eegaa jira.")
+    return redirect('/customers')
+
+@app.route('/approve_mobile_banking/<cust_id>')
+def approve_mobile_banking(cust_id):
+    if 'role' not in session or session['role'] not in ['MANAGER', 'CEO']:
+        return "🚫 Hayyama Manager Qofa!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET mobile_status = 'ACTIVE' WHERE customer_id = ?", (cust_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"✅ Manager ({session['username']}) Mobile Banking maammila (Acc: {cust_id}) mirkaneessee jira.")
+    return redirect('/pending')
+
+@app.route('/reject_mobile_banking/<cust_id>')
+def reject_mobile_banking(cust_id):
+    if 'role' not in session or session['role'] not in ['MANAGER', 'CEO']:
+        return "🚫 Hayyama Manager Qofa!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET mobile_status = 'INACTIVE' WHERE customer_id = ?", (cust_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"❌ Manager ({session['username']}) Mobile Banking maammila (Acc: {cust_id}) kuffisee jira.")
+    return redirect('/pending')
 
 @app.route('/pending')
 def pending():
@@ -1482,6 +1602,9 @@ def pending():
 
     cursor.execute("SELECT * FROM customers WHERE status = 'PENDING_APPROVAL' ORDER BY created_at DESC")
     pending_custs = cursor.fetchall()
+
+    cursor.execute("SELECT * FROM customers WHERE mobile_status = 'PENDING_APPROVAL' AND status = 'ACTIVE' ORDER BY created_at DESC")
+    pending_mobiles = cursor.fetchall()
 
     cursor.execute("SELECT * FROM transactions WHERE status = 'PENDING_MANAGER' ORDER BY timestamp DESC")
     pending_txns = cursor.fetchall()
@@ -1504,11 +1627,32 @@ def pending():
         <div class="item-card">
             <div style="font-size:13px; font-weight:bold;">{c['full_name']} (Acc: {c['customer_id']})</div>
             <div style="font-size:11px; color:#64748b;">Phone: {c['phone']} | Acc Type: {c['account_type']} | Balance: {c['balance']:,.2f} Birr</div>
+            <div style="font-size:11px; color:#1d4ed8; font-weight:bold; margin-top:2px;">📲 Mobile Request Status: {c['mobile_status']}</div>
             <div class="img-grid">
                 <a href="/uploads/{c['photo_path']}" target="_blank"><img src="/uploads/{c['photo_path']}" alt="Face" style="height:60px; border-radius:6px; margin-top:6px; margin-right:6px;"></a>
                 <a href="/uploads/{c['signature_path']}" target="_blank"><img src="/uploads/{c['signature_path']}" alt="Signature" style="height:60px; border-radius:6px; margin-top:6px;"></a>
             </div>
             {manager_cust_btns}
+        </div>
+        """
+
+    mobile_html = ""
+    for m in pending_mobiles:
+        manager_mobile_btns = ""
+        if user_role in ['MANAGER', 'CEO']:
+            manager_mobile_btns = f"""
+            <div style="margin-top:8px;">
+                <a href="/approve_mobile_banking/{m['customer_id']}" class="btn-action btn-green">📲 Approve Mobile Banking</a>
+                <a href="/reject_mobile_banking/{m['customer_id']}" class="btn-action btn-red">❌ Reject Request</a>
+            </div>
+            """
+
+        mobile_html += f"""
+        <div class="item-card" style="border-left: 4px solid #2563eb;">
+            <div style="font-size:13px; font-weight:bold; color:#1e3a8a;">📱 Mobile Banking Request: {m['full_name']} (Acc: {m['customer_id']})</div>
+            <div style="font-size:11px; color:#475569;">Lakk Bilbilaa: <b>{m['phone']}</b> | Gosa Acc: {m['account_type']}</div>
+            <div style="font-size:11px; color:#16a34a; font-weight:bold; margin-top:2px;">PIN Yeroo: {m['mobile_pin']}</div>
+            {manager_mobile_btns}
         </div>
         """
 
@@ -1536,6 +1680,10 @@ def pending():
     content = f"""
     <div class="box">
         <h2 style="font-size:16px; color:#065f46; margin-bottom:12px;">📋 Approvals Dhiyaatan ({session['role']})</h2>
+        
+        <h3 style="font-size:13px; color:#1e3a8a; margin-bottom:8px;">📲 Gaaffii Mobile Banking Pending ({len(pending_mobiles)})</h3>
+        {mobile_html if pending_mobiles else '<p style="font-size:12px; color:#64748b; margin-bottom:16px;">Gaaffiin Mobile Banking eegaa jiru hin jiru.</p>'}
+
         <h3 style="font-size:13px; color:#334155; margin-bottom:8px;">👥 Maammiltoota Pending ({len(pending_custs)})</h3>
         {cust_html if pending_custs else '<p style="font-size:12px; color:#64748b; margin-bottom:16px;">Maammilli eegaa jiru hin jiru.</p>'}
 
@@ -1544,85 +1692,6 @@ def pending():
     </div>
     """
     return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
-
-@app.route('/reject_customer/<cust_id>')
-def reject_customer(cust_id):
-    if 'role' not in session or session['role'] != 'MANAGER':
-        return "🚫 Hayyama Manager Qofa!", 403
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE customers SET status = 'REJECTED' WHERE customer_id = ?", (cust_id,))
-    cursor.execute("UPDATE transactions SET status = 'REJECTED' WHERE customer_id = ? AND status = 'PENDING_MANAGER'", (cust_id,))
-    conn.commit()
-    conn.close()
-
-    add_notification(f"Manager ({session['username']}) customer ID {cust_id} reject godheera.")
-    return redirect('/pending')
-
-@app.route('/approve_customer/<cust_id>')
-def approve_customer(cust_id):
-    if 'role' not in session or session['role'] != 'MANAGER':
-        return "🚫 Hayyama Manager Qofa!", 403
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE customers SET status = 'ACTIVE' WHERE customer_id = ?", (cust_id,))
-    cursor.execute("UPDATE transactions SET status = 'APPROVED' WHERE customer_id = ? AND status = 'PENDING_MANAGER'", (cust_id,))
-    conn.commit()
-    conn.close()
-
-    add_notification(f"Manager ({session['username']}) customer ID {cust_id} approve godheera.")
-    return redirect('/pending')
-
-@app.route('/approve_transaction/<txn_id>')
-def approve_transaction(txn_id):
-    if 'role' not in session or session['role'] != 'MANAGER':
-        return "🚫 Hayyama Manager Qofa!", 403
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM transactions WHERE txn_id = ?", (txn_id,))
-    txn = cursor.fetchone()
-
-    if txn and txn['status'] == 'PENDING_MANAGER':
-        cust_id = txn['customer_id']
-        amount = txn['amount']
-        txn_type = txn['txn_type']
-
-        cursor.execute("SELECT balance FROM customers WHERE customer_id = ?", (cust_id,))
-        cust = cursor.fetchone()
-
-        if txn_type == 'DEPOSIT':
-            cursor.execute("UPDATE customers SET balance = balance + ? WHERE customer_id = ?", (amount, cust_id))
-        elif txn_type in ['WITHDRAWAL', 'T24_TRANSFER', 'RTGS_TRANSFER']:
-            total_deduct = amount + txn['commission']
-            if cust and cust['balance'] >= total_deduct:
-                cursor.execute("UPDATE customers SET balance = balance - ? WHERE customer_id = ?", (total_deduct, cust_id))
-            else:
-                conn.close()
-                return "❌ Balance-ni maammilaa gahaa miti!", 400
-
-        cursor.execute("UPDATE transactions SET status = 'APPROVED' WHERE txn_id = ?", (txn_id,))
-        conn.commit()
-
-    conn.close()
-    add_notification(f"Manager transaction {txn_id} approve godheera.")
-    return redirect('/pending')
-
-@app.route('/reject_transaction/<txn_id>')
-def reject_transaction(txn_id):
-    if 'role' not in session or session['role'] != 'MANAGER':
-        return "🚫 Hayyama Manager Qofa!", 403
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE transactions SET status = 'REJECTED' WHERE txn_id = ?", (txn_id,))
-    conn.commit()
-    conn.close()
-
-    add_notification(f"Manager ({session['username']}) transaction {txn_id} reject godheera.")
-    return redirect('/pending')
 
 @app.route('/customers')
 def customers_list():
@@ -1641,8 +1710,27 @@ def customers_list():
     custs = cursor.fetchall()
     conn.close()
 
+    user_role = session.get('role')
+
     rows_html = ""
     for c in custs:
+        reset_btn = ""
+        mobile_btn = ""
+
+        if user_role in ['MANAGER', 'MAKER', 'CEO']:
+            if c['mobile_status'] == 'INACTIVE':
+                mobile_btn = f'''<a href="/enable_mobile_service/{c['customer_id']}" class="btn-action btn-blue" style="padding:4px 8px; font-size:11px; text-decoration:none;">📲 Request Mobile</a>'''
+            elif c['mobile_status'] == 'PENDING_APPROVAL':
+                mobile_btn = f'''<span class="badge badge-pending">Mobile Pending</span>'''
+            else:
+                mobile_btn = f'''<span class="badge badge-active">Mobile Active</span>'''
+
+            reset_btn = f'''
+            <form method="POST" action="/reset_customer_pin/{c['customer_id']}" style="display:inline;" onsubmit="return confirm('PIN maammila kanaa gara default (1234)tti reset gochuu ni feetaa?')">
+                <button type="submit" class="btn-action btn-purple" style="padding:4px 8px; font-size:11px;">🔑 Reset PIN</button>
+            </form>
+            '''
+
         rows_html += f"""
         <tr style="border-bottom:1px solid #e2e8f0; font-size:12px;">
             <td style="padding:8px; font-weight:bold;">{c['customer_id']}</td>
@@ -1651,12 +1739,13 @@ def customers_list():
             <td style="padding:8px;">{c['account_type']}</td>
             <td style="padding:8px; font-weight:bold; color:#047857;">{c['balance']:,.2f} Birr</td>
             <td style="padding:8px;"><span class="badge {'badge-active' if c['status']=='ACTIVE' else 'badge-pending'}">{c['status']}</span></td>
+            <td style="padding:8px; text-align:right;">{mobile_btn} {reset_btn}</td>
         </tr>
         """
 
     content = f"""
     <div class="box">
-        <h2 style="font-size:16px; color:#065f46; margin-bottom:12px;">👥 Listii Maammiltootaa</h2>
+        <h2 style="font-size:16px; color:#065f46; margin-bottom:12px;">👥 Listii Maammiltootaa & Bulchiinsa Mobile PIN</h2>
         <form method="GET" style="margin-bottom:16px; display:flex; gap:8px;">
             <input type="text" name="search" value="{search}" placeholder="Maqaa, Acc No, Phone..." class="input-field" style="flex:1;">
             <button type="submit" class="btn-action btn-blue">🔍 Barbaadi</button>
@@ -1672,10 +1761,11 @@ def customers_list():
                         <th style="padding:8px;">Type</th>
                         <th style="padding:8px;">Balance</th>
                         <th style="padding:8px;">Status</th>
+                        <th style="padding:8px; text-align:right;">Tarkaanfii (Mobile & Reset PIN)</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows_html if rows_html else '<tr><td colspan="6" style="padding:16px; text-align:center;">Maammilli argame hin jiru.</td></tr>'}
+                    {rows_html if rows_html else '<tr><td colspan="7" style="padding:16px; text-align:center;">Maammilli argame hin jiru.</td></tr>'}
                 </tbody>
             </table>
         </div>
@@ -1683,6 +1773,16 @@ def customers_list():
     """
     return render_template_string(HTML_LAYOUT.replace("{% block content %}{% endblock %}", content), notifications=NOTIFICATIONS)
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+@app.route('/reset_customer_pin/<cust_id>', methods=['POST', 'GET'])
+def reset_customer_pin(cust_id):
+    if 'role' not in session or session['role'] not in ['MANAGER', 'MAKER', 'CEO']:
+        return "🚫 Hayyama Hin Qabdan!", 403
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET mobile_pin = '1234' WHERE customer_id = ?", (cust_id,))
+    conn.commit()
+    conn.close()
+
+    add_notification(f"🔑 PIN Mobile Banking maammilaa (Acc: {cust_id}) gara '1234'tti Reset ta'ee jira ({session['username']}).")
+    return redirect('/customers')
